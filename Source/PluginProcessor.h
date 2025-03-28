@@ -44,6 +44,11 @@ public:
     juce::AudioProcessorValueTreeState parameters;
 
 private:
+    // noise gate to cut signals below threshold - avoids signal bleed
+    float noiseGateThreshold = 0.0001f; // Adjust this value as needed
+    int silenceCounter = 0;
+    int silenceCounterThreshold = 1000; // Approx. 20ms at 48kHz
+
     // Reverb parameters
     std::atomic<float>* sizeParam = nullptr;
     std::atomic<float>* decayParam = nullptr;

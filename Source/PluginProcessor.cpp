@@ -99,9 +99,15 @@ void ReverbWavefolderAudioProcessor::updateReverbParameters()
 {
     reverbParams.roomSize = *sizeParam;
     reverbParams.damping = 1.0f - *decayParam / 20.0f; // Convert decay time to damping
+    
+    // Ensure damping isn't too low at high decay values
+    // Apply a minimum damping value
+    if (reverbParams.damping < 0.05f)
+            reverbParams.damping = 0.05f;
+    
     reverbParams.width = *diffusionParam;
-    reverbParams.wetLevel = 1.0f; // We'll handle dry/wet separately
-    reverbParams.dryLevel = 0.0f; // We'll handle dry/wet separately
+    reverbParams.wetLevel = 1.0f; // Handle dry/wet separately
+    reverbParams.dryLevel = 0.0f; // Handle dry/wet separately
     reverb.setParameters(reverbParams);
 }
 
@@ -116,10 +122,28 @@ void ReverbWavefolderAudioProcessor::applyWavefolding(juce::AudioBuffer<float>& 
     const float shape = *waveformShapeParam;
     const float fundamental = *fundamentalParam;
     
-    // Use our custom wavefolder class
+    // Use custom wavefolder class
     wavefolder.processBlock(buffer, drive, threshold, offset, fold, shape, fundamental);
+    
+    // Add DC blocking (important for pre-reverb position)
+    static float prevIn[2] = {0.0f, 0.0f};
+    static float prevOut[2] = {0.0f, 0.0f};
+    
+    const float dcBlockCoeff = 0.995f;
+    
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+    {
+        float* channelData = buffer.getWritePointer(channel);
+        
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const float input = channelData[sample];
+            channelData[sample] = input - prevIn[channel] + dcBlockCoeff * prevOut[channel];
+            prevIn[channel] = input;
+            prevOut[channel] = channelData[sample];
+        }
+    }
 }
-
 void ReverbWavefolderAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -195,6 +219,44 @@ void ReverbWavefolderAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
             channelData[sample] = dryData[sample] * dry + wetData[sample] * wet;
         }
     }
+    
+    // Apply noise gate to eliminate ghost signals
+    bool hasSignal = false;
+    for (int channel = 0; channel < numChannels && !hasSignal; ++channel)
+        {
+            float* channelData = buffer.getWritePointer(channel);
+            
+            for (int sample = 0; sample < numSamples; ++sample)
+            {
+                if (std::abs(channelData[sample]) > noiseGateThreshold)
+                {
+                    hasSignal = true;
+                    silenceCounter = 0;
+                    break;
+                }
+            }
+        }
+        
+        if (!hasSignal)
+        {
+            silenceCounter += numSamples;
+            
+            if (silenceCounter > silenceCounterThreshold)
+            {
+                // Completely silence the output after the threshold is reached
+                for (int channel = 0; channel < numChannels; ++channel)
+                {
+                    buffer.clear(channel, 0, numSamples);
+                }
+                
+                // Also clear the internal state of the reverb to prevent ghost outputs
+                if (silenceCounter == silenceCounterThreshold + numSamples)
+                {
+                    reverb.reset();
+                    wavefolder.reset();
+                }
+            }
+        }
 }
 
 bool ReverbWavefolderAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
