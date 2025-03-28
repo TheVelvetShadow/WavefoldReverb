@@ -44,6 +44,13 @@ public:
         // Normalize output level
         folded /= drive;
         
+        // Add a small percentage of the original signal to prevent complete cancellation
+        folded = folded * 0.95f + input * 0.05f;
+            
+        // Safety limiter to prevent complete silence
+        if (std::abs(folded) < 0.00001f && std::abs(input) > 0.001f)
+                folded = input * 0.01f;
+        
         return folded;
     }
     
@@ -160,13 +167,14 @@ private:
             // Create a series of tanh folds
             float foldedAmount = std::tanh(foldAmount);
             
-            // Apply symmetry
+            // Apply symmetry with protection against complete cancellation
             if (symmetry > 0.0f)
                 foldedAmount *= (1.0f + symmetry * (1.0f - foldedAmount));
             else if (symmetry < 0.0f)
-                foldedAmount *= (1.0f + symmetry * foldedAmount);
-                
-            return sign * (1.0f - foldedAmount) * threshold;
+                foldedAmount *= (1.0f + std::max(-0.95f, symmetry) * foldedAmount);
+                       
+            // Always preserve at least 5% of the signal
+            return sign * (std::max(0.05f, 1.0f - foldedAmount)) * threshold;
         }
         
         return input;
